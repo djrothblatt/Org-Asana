@@ -2,6 +2,8 @@
 (require 'cl-lib)
 (require 'json)
 (require 'url)
+(require 'dash)
+(require 'let-alist)
 
 (defvar org-asana/me nil
   "Information about the user.")
@@ -66,10 +68,11 @@
     (org-asana/request (concat "/tasks/" .gid "/subtasks"))))
 
 (defun org-asana/task-tree (task)
-      (acons 'subtasks
-             (mapcar #'org-asana/task-tree
-                     (org-asana/subtasks task))
-             task))
+  "Embed TASK's subtasks under a `subtask' key."
+  (acons 'subtasks
+         (mapcar #'org-asana/task-tree
+                 (org-asana/subtasks task))
+         task))
 
 (defun org-asana/task-forest (tasks)
   "Get task trees for every task in TASKS."
@@ -112,12 +115,12 @@
       (org-asana/org-task-data
        (org-asana/workspace-org-task-forest workspace))))))
 
-(defun org-asana/pull-tasks ()
-  "Pull tasks for a workspace from Asana and write as Org."
-  (interactive)
-  (org-asana/with-workspaces
-   (let ((workspace-name (completing-read "Workspace: "
-                                          (mapcar (-partial #'alist-get 'name)
-                                                  workspaces))))
-     (insert
-      (org-asana/workspace-name-org-task-data workspace-name)))))
+(defun org-asana/pull-tasks (workspace-name)
+  "Pull tasks for WORKSPACE-NAME from Asana and write as Org."
+  (interactive (list
+                (org-asana/with-workspaces
+                 (completing-read "Workspace: "
+                                  (mapcar (-partial #'alist-get 'name)
+                                          workspaces)))))
+  (insert
+   (org-asana/workspace-name-org-task-data workspace-name)))
