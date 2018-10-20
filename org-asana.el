@@ -6,6 +6,9 @@
 (defvar org-asana/me nil
   "Information about the user.")
 
+(defvar org-asana/workspaces nil
+  "The user's workspaces.")
+
 (defun org-asana/data (object)
   "Access the data key in OBJECT."
   (alist-get 'data object))
@@ -39,6 +42,15 @@
     (alist-get 'workspaces org-asana/me)
     'list)))
 
+(defun org-asana/set-workspaces! ()
+  "Set value of org-asana/workspaces if not set."
+  (or org-asana/workspaces
+     (setq org-asana/workspaces (org-asana/my-workspaces))))
+
+(cl-defmacro org-asana/with-workspaces (&body body)
+  `(let ((workspaces (org-asana/set-workspaces!)))
+     ,@body))
+
 (defun org-asana/root-tasks (workspace)
   "Fetch tasks that aren't subtasks for `org-asana/me' in WORKSPACE."
   (org-asana/with-me
@@ -66,7 +78,7 @@
 (defun org-asana/workspace-tasks (workspaces)
   "Get task trees for every task in WORKSPACES."
   (mapcan (-compose #'org-asana/task-forest #'org-asana/root-tasks)
-          droth/asana-workspaces))
+          workspaces))
 
 (cl-defun org-asana/org-task-tree (task &optional (level 1))
   "Convert TASK (potentially a tree) into a (possibly nested) Org element."
@@ -80,10 +92,32 @@
                        props)
              subtasks))))
 
-(defun org-asana/org-task-data (task-forest)
-  "Collect TASK-FOREST into Org task trees and wrap in a data element."
+(defun org-asana/workspace-org-task-forest (workspace)
+  "Get task forest as Org from tasks in WORKSPACE."
+  (mapcar #'org-asana/org-task-tree (org-asana/workspace-tasks (list workspace))))
+
+(defun org-asana/org-task-data (org-task-forest)
+  "Wrap ORG-TASK-FOREST in a data element."
   (apply (-partial #'org-element-create
                    'data
                    nil)
-         (mapcar #'org-asana/org-task-tree task-forest)))
+         org-task-forest))
 
+(defun org-asana/workspace-name-org-task-data (workspace-name)
+  "Get org tasks from workspace going by WORKSPACE-NAME."
+  (org-asana/with-workspaces
+   (let ((workspace (find-if (lambda (x) (string-equal (alist-get 'name x) workspace-name))
+                             workspaces)))
+     (org-element-interpret-data
+      (org-asana/org-task-data
+       (org-asana/workspace-org-task-forest workspace))))))
+
+(defun org-asana/pull-tasks ()
+  "Pull tasks for a workspace from Asana and write as Org."
+  (interactive)
+  (org-asana/with-workspaces
+   (let ((workspace-name (completing-read "Workspace: "
+                                          (mapcar (-partial #'alist-get 'name)
+                                                  workspaces))))
+     (insert
+      (org-asana/workspace-name-org-task-data workspace-name)))))
