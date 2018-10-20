@@ -1,0 +1,32 @@
+#+OPTIONS: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline
+#+OPTIONS: author:t broken-links:nil c:nil creator:nil
+#+OPTIONS: d:(not "LOGBOOK") date:t e:t email:nil f:t inline:t num:t
+#+OPTIONS: p:nil pri:nil prop:nil stat:t tags:t tasks:t tex:t
+#+OPTIONS: timestamp:t title:t toc:t todo:t |:t
+#+TITLE: org-asana.el
+#+LANGUAGE: en
+#+SELECT_TAGS: export
+#+EXCLUDE_TAGS: noexport
+#+CREATOR: Emacs 26.1 (Org mode 9.1.14)
+* Introduction
+  ~org-asana.el~ is an Emacs package to sync a user's tasks from [[http://asana.com][Asana]]
+  to Org Mode. Very much a work in progress, but the very basics work
+  right now!
+* Using ~org-asana.el~
+** Getting a Personal Access Token
+   If you don't have an Asana [[https://asana.com/developers/documentation/getting-started/auth#personal-access-token][personal access token]] for your account,
+   get one by following the instructions there.
+   Then set ~org-asana/token~ somewhere (preferably somewhere not in
+   version control, as this token is supposed to be kept secret):
+
+   #+BEGIN_SRC emacs-lisp
+   (setq org-asana/token ...)
+   #+END_SRC
+** Pulling tasks
+   Run ~M-x org-asana/pull-tasks~ in a buffer to get your tasks
+   organized into nested ~TODOs~.
+*** TODO Additional task details
+** TODO Pushing tasks
+   This is not implemented yet. Eventually you should be able to ~M-x
+   org-asana/push-tasks~ inside an Org buffer to synch any changes
+   you've made to Asana.
