@@ -1,0 +1,263 @@
+#+OPTIONS: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline
+#+OPTIONS: author:t broken-links:nil c:nil creator:nil
+#+OPTIONS: d:(not "LOGBOOK") date:t e:t email:nil f:t inline:t num:t
+#+OPTIONS: p:nil pri:nil prop:nil stat:t tags:t tasks:t tex:t
+#+OPTIONS: timestamp:t title:t toc:t todo:t |:t
+#+TITLE: Org Asana Source
+#+AUTHOR: Daniel Rothblatt
+#+LANGUAGE: en
+#+SELECT_TAGS: export
+#+EXCLUDE_TAGS: noexport
+#+CREATOR: Emacs 26.1 (Org mode 9.1.14)
+* Preamble
+  *Always* ~(setq lexical-binding t)~ in your projects.
+  #+NAME: file-local
+  #+BEGIN_SRC emacs-lisp :tangle yes
+  ;; -*- lexical-binding: t -*-
+  #+END_SRC
+
+  And be sure to list your dependencies up front.
+  #+NAME: imports
+  #+BEGIN_SRC emacs-lisp :tangle yes
+    (require 'cl-lib)
+    (require 'json)
+    (require 'url)
+    (require 'dash)
+    (require 'let-alist)
+  #+END_SRC
+
+  Not to mention your variables.
+  #+NAME: defvar
+  #+BEGIN_SRC emacs-lisp :tangle yes
+    (defvar org-asana/me nil
+      "Information about the user.")
+
+    (defvar org-asana/workspaces nil
+      "The user's workspaces.")
+  #+END_SRC
+* Making requests
+  We're going to be making a lot of requests, so we'd better make them
+  easy.
+
+  #+NAME: requests
+  #+BEGIN_SRC emacs-lisp :tangle yes
+    (defun org-asana/data (object)
+      "Access the data key in OBJECT."
+      (alist-get 'data object))
+
+    (cl-defun org-asana/request (endpoint &key (method "GET"))
+      (with-current-buffer
+          (let ((url-request-method method)
+                (url-request-extra-headers
+                `(("Authorization" . ,(concat "Bearer " org-asana/token)))))
+            (url-retrieve-synchronously (concat "https://app.asana.com/api/1.0" endpoint)))
+       (goto-char (1+ url-http-end-of-headers))
+       (seq-into (org-asana/data (json-read-object)) 'list)))
+  #+END_SRC
+
+  Data comes from Asana endpoints under a ~data~ key as a JSON array.
+  ~json~ parses arrays (rightly) as vectors, but we're mainly going to
+  be working with lists.
+** About the user
+   Since we're going to be making requests using the user's Asana
+   information, we want to keep that info to hand and easy to access.
+   I like anaphora, so to me the easiest way to access this
+   information is with a macro.
+
+   #+NAME: user
+   #+BEGIN_SRC emacs-lisp :tangle yes
+     (defun org-asana/about-me ()
+       (org-asana/request "/users/me"))
+
+     (defun org-asana/set-me! ()
+       "Set value of org-asana/me if not set."
+       (or org-asana/me
+          (setq org-asana/me (org-asana/about-me))))
+
+     (cl-defmacro org-asana/with-me (&body body)
+       "Bind anaphoric value `me' in BODY."
+       `(let ((me (org-asana/set-me!)))
+          ,@body))
+   #+END_SRC
+** The user's workspaces
+   A user may belong to multiple workspaces. It would be nice to have
+   something similar to what we have [[*About the user][to work with user data]] to keep
+   these workspaces to hand and easy to work with.
+
+   #+NAME: workspaces
+   #+BEGIN_SRC emacs-lisp :tangle yes
+     (defun org-asana/my-workspaces ()
+       "Get all workspaces associated `with org-asana/me'."
+       (org-asana/with-me
+        (seq-into
+         (alist-get 'workspaces org-asana/me)
+         'list)))
+
+     (defun org-asana/set-workspaces! ()
+       "Set value of org-asana/workspaces if not set."
+       (or org-asana/workspaces
+          (setq org-asana/workspaces (org-asana/my-workspaces))))
+
+     (cl-defmacro org-asana/with-workspaces (&body body)
+       "Bind `workspaces' in BODY."
+       `(let ((workspaces (org-asana/set-workspaces!)))
+          ,@body))
+   #+END_SRC
+** Tasks
+   The first really useful bit of information we'll fetch from Asana
+   is our tasks. This is what I'm really creating this package for, so
+   I'm excited!
+
+   Two things stand out as useful here:
+   1. The Asana [[https://asana.com/developers/documentation/getting-started/search-api][Search API]], which makes it easy to find the user's
+      tasks in a specified workspace, among other things; and
+   2. The Asana notion of a subtask. When we have root tasks and
+      subtasks, we can map them into nested Org Mode ~TODO~ items
+      fairly naturally.
+
+
+   So let's use these!
+
+   First, the search:
+
+   #+NAME: task-search
+   #+BEGIN_SRC emacs-lisp :tangle yes
+     (defun org-asana/root-tasks (workspace)
+       "Fetch tasks that aren't subtasks for `org-asana/me' in WORKSPACE."
+       (org-asana/with-me
+        (let* ((assignee (alist-get 'gid me))
+               (workspace-id (alist-get 'gid workspace))
+               (endpoint (concat "/workspaces/" workspace-id "/tasks/search"))
+               (query-string (url-build-query-string `(("assignee.any" ,assignee) ("is_subtask" "false")))))
+          (org-asana/request (concat endpoint "?" query-string)))))
+   #+END_SRC
+
+   Essentially, what we are asking for is our tasks in a single
+   workspace, as long as they aren't subtasks. The Search API also
+   lets us specify additional fields that we want our data to contain,
+   which will make it really easy to enrich our tasks when we
+   transform them to Org data down the line.
+
+   Now that we have can ~GET~ the tasks that aren't subtasks, we can
+   easily turn a task into a tree of tasks and subtasks using Asana's
+   ~/tasks/:task-id/subtasks~ endpoint.
+
+   #+NAME: subtasks
+   #+BEGIN_SRC emacs-lisp :tangle yes
+     (defun org-asana/subtasks (task)
+       "Fetch subtasks of TASK."
+       (let-alist task
+         (org-asana/request (concat "/tasks/" .gid "/subtasks"))))
+
+     (defun org-asana/task-tree (task)
+       "Embed TASK's subtasks under a `subtask' key."
+       (acons 'subtasks
+              (mapcar #'org-asana/task-tree
+                      (org-asana/subtasks task))
+              task))
+
+     (defun org-asana/task-forest (tasks)
+       "Get task trees for every task in TASKS."
+       (mapcar #'org-asana/task-tree tasks))
+
+     (defun org-asana/workspace-tasks (workspaces)
+       "Get task trees for every task in WORKSPACES."
+       (mapcan (-compose #'org-asana/task-forest #'org-asana/root-tasks)
+               workspaces))
+   #+END_SRC
+
+   Association lists are a beautiful data structure, and they allow us
+   to concisely transform a task into a tree of the task and its
+   subtasks (and their subtasks, as needed)
+
+   By turning every task into a task tree, we get a forest of task
+   trees. Later on, we will see that we can turn each tree into a
+   nested Org Mode ~TODO~ header, the structure that we're hoping to
+   get eventually.
+* Transforming data into Org Mode
+  Thankfully, Org Mode has a comprehensive [[orgmode.org/worg/dev/org-element-api.html][API]] for creating elements.
+  The gist of it for our purposes is:
+
+  * An Org Mode document can be parsed into an [[https://en.wikipedia.org/wiki/Abstract_syntax_tree][AST]]
+
+    We can also transform this AST back into Org Mode text. This means
+    all we need to do is convert our Asana task forests into an Org
+    AST.
+  * We use ~org-element-create~ to, well, create an Org element
+    + We specify what type of element we want as the first argument
+
+      In our case we usually want a ~headline~ element, which is an
+      Org header
+
+    + We specify the contents of the element with the second argument,
+      ~props~, a plist
+
+      We definitely want a ~headline~ to have a ~:title~, a ~:level~
+      (of nesting), and a ~:todo-keyword~.
+
+    + Any children we want the element to take we pass as the
+      remaining arguments
+
+      This gives us a system of markup generation that reminds me an
+      awful lot of [[https://en.wikipedia.org/wiki/React_(JavaScript_library)#JSX][JSX]], but much verbose. Also, since
+      ~org-element-create~ is a function, we can ~apply~ it and even
+      make partial constructors with it. We will use this!
+
+
+  #+NAME: tasks-to-org
+  #+BEGIN_SRC emacs-lisp :tangle yes
+    (cl-defun org-asana/org-task-tree (task &optional (level 1))
+      "Convert TASK (potentially a tree) into a (possibly nested) Org element."
+      (let-alist task
+        (let ((props (list :title .name :todo-keyword "TODO" :level level))
+              (subtasks (mapcar (-partial (-flip #'org-asana/org-task-tree)
+                                          (1+ level))
+                                .subtasks)))
+          (apply (-partial #'org-element-create
+                           'headline
+                           props)
+                 subtasks))))
+
+    (defun org-asana/workspace-org-task-forest (workspace)
+      "Get task forest as Org from tasks in WORKSPACE."
+      (mapcar #'org-asana/org-task-tree (org-asana/workspace-tasks (list workspace))))
+
+    (defun org-asana/org-task-data (org-task-forest)
+      "Wrap ORG-TASK-FOREST in a data element."
+      (apply (-partial #'org-element-create
+                       'data
+                       nil)
+             org-task-forest))
+
+    (defun org-asana/workspace-name-org-task-data (workspace-name)
+      "Get org tasks from workspace going by WORKSPACE-NAME."
+      (org-asana/with-workspaces
+       (let ((workspace (find-if (lambda (x) (string-equal (alist-get 'name x) workspace-name))
+                                 workspaces)))
+         (org-element-interpret-data
+          (org-asana/org-task-data
+           (org-asana/workspace-org-task-forest workspace))))))
+
+    (defun org-asana/pull-tasks (workspace-name)
+      "Pull tasks for WORKSPACE-NAME from Asana and write as Org."
+      (interactive (list
+                    (org-asana/with-workspaces
+                     (if (cdr workspaces)
+                         (completing-read "Workspace: "
+                                      (mapcar (-partial #'alist-get 'name)
+                                              workspaces))
+                       (alist-get 'name (car workspaces))))))
+      (insert
+       (org-asana/workspace-name-org-task-data workspace-name)))
+  #+END_SRC
+
+  With our task trees in place we can use ~org-element-interpret-data~ to transform
+  our AST into text. A requirement for this function appears to be
+  that the root element of the AST be a ~data~ element, so we are sure
+  to wrap our tasks in one with ~org-asana/org-task-data~.
+  
+  We also have our very first command here. (Finally!)
+  ~completing-read~ makes it really nice to choose our workspace (if
+  we have more than one to choose from), and frees us from choosing
+  the user's completion framework for them. (I like [[https://github.com/emacs-helm/helm][Helm]] a lot, but
+  I don't want to lock other people into it.)

@@ -1,4 +1,5 @@
 ;; -*- lexical-binding: t -*-
+
 (require 'cl-lib)
 (require 'json)
 (require 'url)
@@ -50,6 +51,7 @@
      (setq org-asana/workspaces (org-asana/my-workspaces))))
 
 (cl-defmacro org-asana/with-workspaces (&body body)
+  "Bind `workspaces' in BODY."
   `(let ((workspaces (org-asana/set-workspaces!)))
      ,@body))
 
@@ -119,8 +121,11 @@
   "Pull tasks for WORKSPACE-NAME from Asana and write as Org."
   (interactive (list
                 (org-asana/with-workspaces
-                 (completing-read "Workspace: "
+                 (if (cdr workspaces)
+                     (completing-read "Workspace: "
                                   (mapcar (-partial #'alist-get 'name)
-                                          workspaces)))))
+                                          workspaces))
+                   (alist-get 'name (car workspaces))))))
   (insert
    (org-asana/workspace-name-org-task-data workspace-name)))
+
