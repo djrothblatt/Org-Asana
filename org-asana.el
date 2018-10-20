@@ -63,3 +63,27 @@
   "Get task trees for every task in TASKS."
   (mapcar #'org-asana/task-tree tasks))
 
+(defun org-asana/workspace-tasks (workspaces)
+  "Get task trees for every task in WORKSPACES."
+  (mapcan (-compose #'org-asana/task-forest #'org-asana/root-tasks)
+          droth/asana-workspaces))
+
+(cl-defun org-asana/org-task-tree (task &optional (level 1))
+  "Convert TASK (potentially a tree) into a (possibly nested) Org element."
+  (let-alist task
+    (let ((props (list :title .name :todo-keyword "TODO" :level level))
+          (subtasks (mapcar (-partial (-flip #'org-asana/org-task-tree)
+                                      (1+ level))
+                            .subtasks)))
+      (apply (-partial #'org-element-create
+                       'headline
+                       props)
+             subtasks))))
+
+(defun org-asana/org-task-data (task-forest)
+  "Collect TASK-FOREST into Org task trees and wrap in a data element."
+  (apply (-partial #'org-element-create
+                   'data
+                   nil)
+         (mapcar #'org-asana/org-task-tree task-forest)))
+
