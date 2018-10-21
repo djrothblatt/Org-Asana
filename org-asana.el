@@ -16,12 +16,13 @@
   "Access the data key in OBJECT."
   (alist-get 'data object))
 
-(cl-defun org-asana/request (endpoint &key (method "GET"))
+(cl-defun org-asana/request (endpoint &key (method "GET") query)
   (with-current-buffer
       (let ((url-request-method method)
             (url-request-extra-headers
-            `(("Authorization" . ,(concat "Bearer " org-asana/token)))))
-        (url-retrieve-synchronously (concat "https://app.asana.com/api/1.0" endpoint)))
+             `(("Authorization" . ,(concat "Bearer " org-asana/token))))
+            (query-string (url-build-query-string query)))
+        (url-retrieve-synchronously (concat "https://app.asana.com/api/1.0" endpoint "?" query-string)))
    (goto-char (1+ url-http-end-of-headers))
    (seq-into (org-asana/data (json-read-object)) 'list)))
 
@@ -61,13 +62,16 @@
    (let* ((assignee (alist-get 'gid me))
           (workspace-id (alist-get 'gid workspace))
           (endpoint (concat "/workspaces/" workspace-id "/tasks/search"))
-          (query-string (url-build-query-string `(("assignee.any" ,assignee) ("is_subtask" "false")))))
-     (org-asana/request (concat endpoint "?" query-string)))))
+          (query `(("assignee.any" ,assignee)
+                   ("is_subtask" "false")
+                   ,org-asana/task-fields)))
+     (org-asana/request endpoint :query query))))
 
 (defun org-asana/subtasks (task)
   "Fetch subtasks of TASK."
   (let-alist task
-    (org-asana/request (concat "/tasks/" .gid "/subtasks"))))
+    (org-asana/request (concat "/tasks/" .gid "/subtasks")
+                       :query (list org-asana/task-fields))))
 
 (defun org-asana/task-tree (task)
   "Embed TASK's subtasks under a `subtask' key."

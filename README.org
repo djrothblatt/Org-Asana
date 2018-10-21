@@ -28,5 +28,5 @@
 *** TODO Additional task details
 ** TODO Pushing tasks
    This is not implemented yet. Eventually you should be able to ~M-x
-   org-asana/push-tasks~ inside an Org buffer to synch any changes
+   org-asana/push-tasks~ inside an Org buffer to sync any changes
    you've made to Asana.
